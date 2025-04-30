@@ -480,6 +480,31 @@ class BottleneckCSP(nn.Module):
         y2 = self.cv2(x)
         return self.cv4(self.act(self.bn(torch.cat((y1, y2), dim=1))))
 
+class C2f(nn.Module):
+    def __init__(self, c1, c2, n=1, k=3, d=1, shortcut=True, g=1, e=0.5, e_bottleneck=1., separable=False):
+        super(C2f, self).__init__()
+        if isinstance(k, int): ks = [k for _ in range(n)]
+        else: ks = k
+        if isinstance(d, int): ds = [d for _ in range(n)]
+        else: ds = d
+        if isinstance(e_bottleneck, float): es = [e_bottleneck for _ in range(n)]
+        else: es = e_bottleneck
+        assert len(ks) >= n
+        assert len(ds) >= n
+        assert (len(es) >= n) or (len(es) >= n+1)
+
+        if isinstance(c2, int): c2=[c2 for _ in range(n)]
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * c_, k=1, d=1, s=1)
+        self.cv2 = Conv((n+2) * c_, c2, k=1, d=1, s=1)
+        self.m = nn.ModuleList(Bottleneck(c_, c_, ks[i], ds[i], shortcut, g, e=es[i]) for i in range(n))
+
+    def forward(self, x):
+        x = self.cv1(x)
+        y = torch.chunk(x, 2, 1)
+        for m in self.m:
+           y += (m(y[-1]))
+        return self.cv2(torch.cat(y, 1))
 
 class C3(nn.Module):
     # CSP Bottleneck with 3 convolutions
@@ -511,6 +536,41 @@ class C3(nn.Module):
 
     def forward(self, x):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
+    
+
+class C2f_search(nn.Module):
+    def __init__(self, c1, c2, n=1, kd=[(3,1),(5,1),(3,2)], shortcut=True, g=1, e=0.5, gumbel_op=False): 
+        super(C2f_search, self).__init__()
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * c_, k=1, d=1, s=1)
+        self.cv2 = Conv((n + 2) * c_, c2, k=1, d=1, s=1)
+        self.m = nn.ModuleList([Bottleneck_search(c_, c_, kd, shortcut, g, e=1.0, gumbel_op=gumbel_op) for _ in range(n)])
+
+    def forward(self, x):
+        x = self.cv1(x)
+        y = torch.chunk(x, 2, 1)
+        for m in self.m:
+           y += (m(y[-1]),)
+        return self.cv2(torch.cat(y, 1))
+
+    def get_alphas(self):
+        alphas = []
+        for m in self.m:
+          alphas.extend(m.get_alphas())
+        return alphas
+
+    def get_op_alphas(self):
+        alphas = []
+        for m in self.m:
+          alphas.extend(m.get_op_alphas())
+        return alphas
+
+    def get_ch_alphas(self):
+        alphas = []
+        for m in self.m:
+          alphas.extend(m.get_ch_alphas())
+        return alphas
+    
 
 class C3_search(nn.Module):
     # CSP Bottleneck with 3 convolutions
@@ -543,6 +603,68 @@ class C3_search(nn.Module):
         for m in self.m:
           alphas.extend(m.get_ch_alphas())
         return alphas
+    
+class C2f_search_merge(nn.Module):
+    def __init__(self, c1, c2, n=1, kd=[(3,1),(5,1),(3,2)], candidate_e=[1.], shortcut=True, g=1, e=0.5, search_c2=None, gumbel_channel=False, separable=False):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super(C2f_search_merge, self).__init__()
+        if search_c2==True:
+          self.search_c2 = candidate_e
+        else:
+          self.search_c2 = search_c2
+        self.gumbel_channel = gumbel_channel
+
+        if self.search_c2:
+            c2 = c2[0] if isinstance(c2, list) else c2
+            c2_max = int(c2 * max(self.search_c2))
+            c_ = int(c2_max * e)
+            self.cv1 = Conv_search_merge(c1, 2 * c_, kd=[(1, 1)], candidate_e=self.search_c2, s=1, gumbel_channel=gumbel_channel, inside_alphas_channel=False)
+            self.cv2 = Conv_search_merge((n + 2) * c_, c2, kd=[(1, 1)], candidate_e=self.search_c2, s=1, gumbel_channel=gumbel_channel, inside_alphas_channel=False)
+            self.register_buffer('alphas_channel', torch.autograd.Variable(1e-3 * torch.randn(len(self.search_c2)), requires_grad=True))
+        else:
+            c_ = int(c2 * e)
+            self.cv1 = Conv(c1, 2 * c_, k=1, s=1)
+            self.cv2 = Conv((n + 2) * c_, c2, k=1)
+            self.alphas_channel = None
+
+        self.m = nn.ModuleList([Bottleneck_search_merge(c_, c_, kd, candidate_e, shortcut, g, e=1.0, gumbel_channel=gumbel_channel, separable=separable) for _ in range(n)])
+
+    def forward(self, x):
+        if self.search_c2:
+            alphas_channel = gumbel_softmax(F.log_softmax(self.alphas_channel, dim=-1), hard=True) if self.gumbel_channel else F.softmax(self.alphas_channel, dim=-1)
+            x = self.cv1.forward_withAlpha(x, alphas_channel)
+        else:
+            x = self.cv1(x)
+
+        y = torch.chunk(x, 2, 1)
+        for m in self.m:
+            y += (m(y[-1]),)
+
+        out = torch.cat(y, 1)
+
+        if self.search_c2:
+            return self.cv2.forward_withAlpha(out, alphas_channel)
+        else:
+            return self.cv2(out)
+       
+    def get_alphas(self):
+        alphas = []
+        for m in self.m:
+          alphas.extend(m.get_alphas())
+        if self.search_c2: alphas.append(self.alphas_channel)
+        return alphas
+
+    def get_op_alphas(self):
+        alphas = []
+        for m in self.m:
+          alphas.extend(m.get_op_alphas())
+        return alphas
+
+    def get_ch_alphas(self):
+        alphas = []
+        for m in self.m:
+          alphas.extend(m.get_ch_alphas())
+        if self.search_c2: alphas.append(self.alphas_channel)
+        return alphas
 
 class C3_search_merge(nn.Module):
     # CSP Bottleneck with 3 convolutions
@@ -555,7 +677,7 @@ class C3_search_merge(nn.Module):
         self.gumbel_channel = gumbel_channel
 
         if self.search_c2:
-          c2 = c2 * max(self.search_c2)
+          c2 = int(c2 * max(self.search_c2))
           c_ = int(c2 * e)  # hidden channels
           self.cv1 = Conv_search_merge(c1, c_, kd=[(1,1)], candidate_e=self.search_c2, s=1, gumbel_channel=gumbel_channel, inside_alphas_channel=False)
           self.cv2 = Conv_search_merge(c1, c_, kd=[(1,1)], candidate_e=self.search_c2, s=1, gumbel_channel=gumbel_channel, inside_alphas_channel=False)

@@ -274,7 +274,7 @@ class Model(nn.Module):
                  else: tmp[3].append({'e_bottleneck':e})
                else: tmp[3][0] = Cout * e 
                idx_op += n; idx_ch += n
-            elif tmp[2] in ['C3_search', 'C3_search_merge']:
+            elif tmp[2] in ['C2f_search', 'C2f_search_merge']:
                n = tmp[1]
                n = max(round(n * gd), 1) if n > 1 else n  # depth gain
                func_p = tmp[3]
@@ -403,13 +403,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         else: args_dict = {}
 
         n = max(round(n * gd), 1) if n > 1 else n  # depth gain
-        if m in [Conv, GhostConv, Bottleneck, Bottleneck_search, GhostBottleneck, SPP, DWConv, MixConv2d, Conv_search, Focus, CrossConv, BottleneckCSP, C3, C3_search, Conv_search_merge, Bottleneck_search_merge, C3_search_merge, SPP_search]:
+        if m in [Conv, GhostConv, Bottleneck, Bottleneck_search, GhostBottleneck, SPP, DWConv, MixConv2d, Conv_search, Focus, CrossConv, BottleneckCSP, C2f, C2f_search, Conv_search_merge, Bottleneck_search_merge, C2f_search_merge, SPP_search]:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in [BottleneckCSP, C3, C3_search, C3_search_merge]:
+            if m in [BottleneckCSP, C2f, C2f_search, C2f_search_merge]:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m in [Cells_search, Cells_search_merge, Cells]:
@@ -446,7 +446,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f]
 
         m_ = nn.Sequential(*[m(*args, **args_dict) for _ in range(n)]) if n > 1 else m(*args, **args_dict)  # module
-        if m in [Conv_search, Bottleneck_search, C3_search, Conv_search_merge, Bottleneck_search_merge, C3_search_merge, AFF, Cells_search, Cells_search_merge]:
+        if m in [Conv_search, Bottleneck_search, C2f_search, Conv_search_merge, Bottleneck_search_merge, C2f_search_merge, AFF, Cells_search, Cells_search_merge]:
           m_list = [m_] if n==1 else m_
           for tmp in m_list: 
             arch_parameters.extend(tmp.get_alphas())
@@ -467,7 +467,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             ch = []
         if m in [Conv_search_merge]:
           ch.append(int(c2*max(args[3])))
-        elif m in [C3_search, Bottleneck_search, C3_search_merge, Bottleneck_search_merge]:
+        elif m in [C2f_search, Bottleneck_search, C2f_search_merge, Bottleneck_search_merge]:
           ch.append(c2)
         elif m in [Cells_search, Cells_search_merge]:
           ch.append(c2*args[1])

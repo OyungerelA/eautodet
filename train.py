@@ -43,7 +43,7 @@ def search_ckpt_process(search_ckpt, model_ckpt, cfg):
     with open(cfg) as f:
       cfg = yaml.load(f, Loader=yaml.SafeLoader)  # model dict
     for i, (f, n, m, args) in enumerate(cfg['backbone'] + cfg['head']):  # from, number, module, args
-      if m in ['Conv', 'C3', 'Bottleneck']:
+      if m in ['Conv', 'C2f', 'Bottleneck']:
         dilation = args[2]
         if isinstance(dilation, int): conv_dilation.append(dilation)
         elif isinstance(dilation, list): conv_dilation.extend(dilation)
