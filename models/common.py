@@ -493,17 +493,28 @@ class C2f(nn.Module):
         assert len(ds) >= n
         assert (len(es) >= n) or (len(es) >= n+1)
 
-        if isinstance(c2, int): c2=[c2 for _ in range(n)]
+        # if isinstance(c2, int): c2=[c2 for _ in range(n)]
+        # c_ = int(c2 * e)
+        # if isinstance(c2, int):
+        #     c2 = [c2 for _ in range(n)]
+        # elif isinstance(c2, list) and len(c2) == 1:
+        #     c2 = c2 * n  # expand single-item list
+        # elif not isinstance(c2, list):
+        #     raise ValueError(f"Unsupported type for c2: {type(c2)}")
+
+        # c2_out = c2[0]  # use a scalar value
         c_ = int(c2 * e)
         self.cv1 = Conv(c1, 2 * c_, k=1, d=1, s=1)
         self.cv2 = Conv((n+2) * c_, c2, k=1, d=1, s=1)
         self.m = nn.ModuleList(Bottleneck(c_, c_, ks[i], ds[i], shortcut, g, e=es[i]) for i in range(n))
 
     def forward(self, x):
-        x = self.cv1(x)
-        y = torch.chunk(x, 2, 1)
-        for m in self.m:
-           y += (m(y[-1]))
+        # x = self.cv1(x)
+        # y = torch.chunk(x, 2, 1)
+        # for m in self.m:
+        #    y += (m(y[-1]))
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
 
 class C3(nn.Module):
